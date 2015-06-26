@@ -65,6 +65,9 @@ namespace {
     boost::shared_ptr<GG::Texture> DamageIcon()
     { return ClientUI::GetTexture(ClientUI::ArtDir() / "icons" / "meter" / "damage.png", true); }
 
+    boost::shared_ptr<GG::Texture> TroopIcon()
+    { return ClientUI::GetTexture(ClientUI::ArtDir() / "icons" / "meter" / "troops.png", true); }
+
     boost::shared_ptr<GG::Texture> FleetCountIcon()
     { return ClientUI::GetTexture(ClientUI::ArtDir() / "icons" / "sitrep" / "fleet_arrived.png"); }
 
@@ -934,6 +937,11 @@ void ShipDataPanel::Refresh() {
                 DamageIcon(), UserString("SHIP_DAMAGE_STAT_TITLE"),
                 UserString("SHIP_DAMAGE_STAT_MAIN")));
             it->second->SetBrowseInfoWnd(browse_wnd);
+        } else if (it->first == METER_TROOPS) {
+            boost::shared_ptr<GG::BrowseInfoWnd> browse_wnd(new IconTextBrowseWnd(
+                TroopIcon(), UserString("SHIP_TROOPS_TITLE"),
+                UserString("SHIP_TROOPS_STAT")));
+            it->second->SetBrowseInfoWnd(browse_wnd);
         } else {
             boost::shared_ptr<GG::BrowseInfoWnd> browse_wnd(new MeterBrowseWnd(
                 m_ship_id, it->first, AssociatedMeterType(it->first)));
@@ -948,6 +956,8 @@ double ShipDataPanel::StatValue(MeterType stat_name) const {
     if (TemporaryPtr<const Ship> ship = GetShip(m_ship_id)) {
         if (stat_name == METER_DAMAGE)
             return ship->TotalWeaponsDamage();
+        else if (stat_name == METER_TROOPS)
+            return ship->TroopCapacity();
 
         if (ship->UniverseObject::GetMeter(stat_name)) {
             return ship->InitialMeterValue(stat_name);
@@ -1021,12 +1031,20 @@ void ShipDataPanel::Init() {
 
     int tooltip_delay = GetOptionsDB().Get<int>("UI.tooltip-delay");
 
-
-    // damage stat icon
-    StatisticIcon* icon = new StatisticIcon(DamageIcon(), 0, 0, false);
-    m_stat_icons.push_back(std::make_pair(METER_DAMAGE, icon));
-    AttachChild(icon);
-    icon->SetBrowseModeTime(tooltip_delay);
+    bool show_troops = !ship->IsArmed() && ship->HasTroops();
+    if (!show_troops) {
+        // damage stat icon
+        StatisticIcon* icon = new StatisticIcon(DamageIcon(), 0, 0, false);
+        m_stat_icons.push_back(std::make_pair(METER_DAMAGE, icon));
+        AttachChild(icon);
+        icon->SetBrowseModeTime(tooltip_delay);
+    } else {
+        // troops stat icon
+        StatisticIcon* icon = new StatisticIcon(TroopIcon(), 0, 0, false);
+        m_stat_icons.push_back(std::make_pair(METER_TROOPS, icon));
+        AttachChild(icon);
+        icon->SetBrowseModeTime(tooltip_delay);
+    }
 
     // meter stat icons
     std::vector<MeterType> meters;
@@ -1133,12 +1151,21 @@ FleetDataPanel::FleetDataPanel(GG::X w, GG::Y h, int fleet_id) :
         icon->SetBrowseText(UserString("FW_FLEET_COUNT_SUMMARY"));
         AttachChild(icon);
 
-        // stat icon for fleet damage
-        icon = new StatisticIcon(DamageIcon(), 0, 0, false);
-        m_stat_icons.push_back(std::make_pair(METER_DAMAGE, icon));
-        icon->SetBrowseModeTime(tooltip_delay);
-        icon->SetBrowseText(UserString("FW_FLEET_DAMAGE_SUMMARY"));
-        AttachChild(icon);
+        if (fleet->HasArmedShips() || !fleet->HasTroopShips()) {
+            // stat icon for fleet damage
+            icon = new StatisticIcon(DamageIcon(), 0, 0, false);
+            m_stat_icons.push_back(std::make_pair(METER_DAMAGE, icon));
+            icon->SetBrowseModeTime(tooltip_delay);
+            icon->SetBrowseText(UserString("FW_FLEET_DAMAGE_SUMMARY"));
+            AttachChild(icon);
+        } else {
+            // stat icon for fleet troops
+            icon = new StatisticIcon(TroopIcon(), 0, 0, false);
+            m_stat_icons.push_back(std::make_pair(METER_TROOPS, icon));
+            icon->SetBrowseModeTime(tooltip_delay);
+            icon->SetBrowseText(UserString("FW_FLEET_TROOP_SUMMARY"));
+            AttachChild(icon);
+        }
 
         // stat icon for fleet structure
         icon = new StatisticIcon(ClientUI::MeterIcon(METER_STRUCTURE), 0, 0, false);
@@ -1463,6 +1490,7 @@ void FleetDataPanel::SetStatIconValues() {
     float shield_tally =    0.0f;
     float min_fuel =        0.0f;
     float min_speed =       0.0f;
+    float troops_tally =    0.0f;
     std::vector<float> fuels;
     std::vector<float> speeds;
 
@@ -1485,6 +1513,7 @@ void FleetDataPanel::SetStatIconValues() {
         if (ship->Design()) {
             ship_count++;
             damage_tally += ship->TotalWeaponsDamage();
+            troops_tally += ship->TroopCapacity();
             structure_tally += ship->InitialMeterValue(METER_STRUCTURE);
             shield_tally += ship->InitialMeterValue(METER_SHIELD);
             fuels.push_back(ship->InitialMeterValue(METER_FUEL));
@@ -1511,6 +1540,8 @@ void FleetDataPanel::SetStatIconValues() {
             it->second->SetValue(damage_tally);
         else if (stat_name == METER_SIZE)
             it->second->SetValue(ship_count);
+        else if (stat_name == METER_TROOPS)
+            it->second->SetValue(troops_tally);
     }
 }
 
@@ -1700,52 +1731,94 @@ public:
     }
 
     virtual void    AcceptDrops(const std::vector<GG::Wnd*>& wnds, const GG::Pt& pt) {
-        //std::cout << "FleetsListBox::AcceptDrops" << std::endl;
-        assert(!wnds.empty());
+        DebugLogger() << "FleetsListBox::AcceptDrops";
+        if (wnds.empty()) {
+            ErrorLogger() << "... dropped wnds empty";
+            return;
+        }
+        if (!m_order_issuing_enabled) {
+            DebugLogger() << "... order issuing disabled, aborting";
+            return;
+        }
+
+
 
         iterator drop_target_row = RowUnderPt(pt);
-        assert(m_order_issuing_enabled && drop_target_row != end());
+        DebugLogger() << "... drop pt: " << pt;
+        if (drop_target_row == end()) {
+            DebugLogger() << "... drop row is end, aborting";
+            return;
+        }
+        DebugLogger() << "... drop row is in position: " << std::distance(begin(), drop_target_row);
 
 
         // get drop target fleet
         const FleetRow* drop_target_fleet_row = boost::polymorphic_downcast<FleetRow*>(*drop_target_row);
-        assert(drop_target_fleet_row);
+        if (!drop_target_fleet_row) {
+            ErrorLogger() << "... drop target not a fleet row. aborting";
+            return;
+        }
 
-        TemporaryPtr<Fleet> target_fleet = GetFleet(drop_target_fleet_row->FleetID());
-        assert(target_fleet);
-
-        int target_fleet_id = target_fleet->ID();
+        int target_fleet_id = drop_target_fleet_row->FleetID();
+        TemporaryPtr<Fleet> target_fleet = GetFleet(target_fleet_id);
+        if (!target_fleet) {
+            ErrorLogger() << "... unable to get target fleet with id: " << target_fleet_id;
+            return;
+        }
 
 
         // sort dropped Wnds to extract fleets or ships dropped.  (should only be one or the other in a given drop)
         std::vector<TemporaryPtr<Fleet> > dropped_fleets;
         std::vector<TemporaryPtr<Ship> > dropped_ships;
 
+        DebugLogger() << "... getting/sorting dropped fleets or ships...";
         for (std::vector<Wnd*>::const_iterator it = wnds.begin(); it != wnds.end(); ++it) {
             const GG::Wnd* wnd = *it;
 
+            if (drop_target_fleet_row == wnd) {
+                ErrorLogger() << "... ... dropped wnd is same as drop target?! skipping";
+                continue;
+            }
+
             if (wnd->DragDropDataType() == FLEET_DROP_TYPE_STRING) {
                 const FleetRow* fleet_row = boost::polymorphic_downcast<const FleetRow*>(wnd);
-                assert(fleet_row);
+                if (!fleet_row) {
+                    ErrorLogger() << "... ... unable to get fleet row from dropped wnd";
+                    continue;
+                }
                 dropped_fleets.push_back(GetFleet(fleet_row->FleetID()));
 
             } else if (wnd->DragDropDataType() == SHIP_DROP_TYPE_STRING) {
                 const ShipRow* ship_row = boost::polymorphic_downcast<const ShipRow*>(wnd);
-                assert(ship_row);
+                if (!ship_row) {
+                    ErrorLogger() << "... ... unable to get ship row from dropped wnd";
+                    continue;
+                }
                 dropped_ships.push_back(GetShip(ship_row->ShipID()));
             }
         }
 
-        assert(dropped_ships.empty() != dropped_fleets.empty());    // should only be dropping fleets or ships, not a mix of both
+        if (dropped_ships.empty() && dropped_fleets.empty()) {
+            ErrorLogger() << "... no ships or fleets dropped... aborting";
+            return;
+        }
+
+        if (dropped_ships.empty() == dropped_fleets.empty()) {
+            ErrorLogger() << "... dropped a mix of fleets and ships... aborting";
+            return;
+        }
         int empire_id = HumanClientApp::GetApp()->EmpireID();
 
         if (!dropped_fleets.empty()) {
+            DebugLogger() << " ... processing dropped " << dropped_fleets.size() << " fleets";
             // dropping fleets.  get each ships of all source fleets and transfer to the target fleet
-            //std::cout << ".... dropped " << dropped_fleets.size() << " fleets" << std::endl;
 
             for (std::vector<TemporaryPtr<Fleet> >::const_iterator it = dropped_fleets.begin(); it != dropped_fleets.end(); ++it) {
                 TemporaryPtr<const Fleet> dropped_fleet = *it;
-                assert(dropped_fleet);
+                if (!dropped_fleet) {
+                    ErrorLogger() << "... ... unable to get dropped fleet?";
+                    continue;
+                }
                 int dropped_fleet_id = dropped_fleet->ID();
 
                 // get fleet's ships in a vector, as this is what FleetTransferOrder takes
@@ -1767,8 +1840,8 @@ public:
             }
 
         } else if (!dropped_ships.empty()) {
+            DebugLogger() << " ... processing dropped " << dropped_ships.size() << " ships";
             // dropping ships.  transfer to target fleet.
-            //std::cout << ".... dropped " << dropped_ships.size() << " ships" << std::endl;
 
             // get source fleet of ship(s).  assumes all ships are from the same source fleet.
             TemporaryPtr<const Ship> first_ship = dropped_ships[0];
@@ -1779,7 +1852,10 @@ public:
             std::set<int> dropped_ships_fleets;
             for (std::vector<TemporaryPtr<Ship> >::const_iterator it = dropped_ships.begin(); it != dropped_ships.end(); ++it) {
                 TemporaryPtr<const Ship> ship = *it;
-                assert(ship);
+                if (!ship) {
+                    ErrorLogger() << "... ... couldn't get dropped ship?";
+                    continue;
+                }
                 ship_ids_vec.push_back(ship->ID());
                 dropped_ships_fleets.insert(ship->FleetID());
             }
@@ -1800,6 +1876,7 @@ public:
                     // TODO: moderator action to transfer ships / remove empty fleets
             }
         }
+        DebugLogger() << "FleetsListBox::AcceptDrops finished";
     }
 
     virtual void    DragDropEnter(const GG::Pt& pt, const std::map<Wnd*, GG::Pt>& drag_drop_wnds, GG::Flags<GG::ModKey> mod_keys)
@@ -2370,9 +2447,7 @@ void FleetDetailPanel::ShipRightClicked(GG::ListBox::iterator it, const GG::Pt& 
         menu_contents.next_level.push_back(GG::MenuItem(popup_label, 5, false, false));
     }
 
-    if (ship->OwnedBy(client_empire_id)
-        || ClientPlayerIsModerator())
-    {
+    if (ship->OwnedBy(client_empire_id) || ClientPlayerIsModerator()) {
         menu_contents.next_level.push_back(GG::MenuItem(UserString("RENAME"), 1, false, false));
     }
 
@@ -2572,6 +2647,13 @@ void FleetWnd::Init(int selected_fleet_id) {
     icon->SetBrowseText(UserString("FW_FLEET_SHIELD_SUMMARY"));
     AttachChild(icon);
 
+    // stat icon for fleet troops
+    icon = new StatisticIcon(TroopIcon(), 0, 0, false);
+    m_stat_icons.push_back(std::make_pair(METER_TROOPS, icon));
+    icon->SetBrowseModeTime(tooltip_delay);
+    icon->SetBrowseText(UserString("FW_FLEET_TROOP_SUMMARY"));
+    AttachChild(icon);
+
     // create fleet list box
     m_fleets_lb = new FleetsListBox(m_order_issuing_enabled);
     m_fleets_lb->SetHiliteColor(GG::CLR_ZERO);
@@ -2623,6 +2705,7 @@ void FleetWnd::SetStatIconValues() {
     float damage_tally =    0.0;
     float structure_tally = 0.0;
     float shield_tally =    0.0;
+    float troop_tally =     0.0;
 
     std::vector<TemporaryPtr<const Fleet> > fleets = Objects().FindObjects<const Fleet>(m_fleet_ids);
     for (std::vector<TemporaryPtr<const Fleet> >::const_iterator fleet_it = fleets.begin();
@@ -2651,6 +2734,7 @@ void FleetWnd::SetStatIconValues() {
                 damage_tally += ship->TotalWeaponsDamage();
                 structure_tally += ship->InitialMeterValue(METER_STRUCTURE);
                 shield_tally += ship->InitialMeterValue(METER_SHIELD);
+                troop_tally += ship->TroopCapacity();
             }
         }
     }
@@ -2667,6 +2751,8 @@ void FleetWnd::SetStatIconValues() {
             it->second->SetValue(damage_tally);
         else if (stat_name == METER_SIZE)
             it->second->SetValue(ship_count);
+        else if (stat_name == METER_TROOPS)
+            it->second->SetValue(troop_tally);
     }
 }
 

@@ -17,14 +17,19 @@
 
 
 namespace {
-    GG::X ICON_WIDTH(16);
     GG::X ICON_RIGHT_MARGIN(3);
     GG::Y ITEM_VERTICAL_PADDING(2);
 
     /** Adds options related to SitRepPanel to Options DB. */
-    void AddOptions(OptionsDB& db)
-    { db.Add("verbose-sitrep", UserStringNop("OPTIONS_DB_VERBOSE_SITREP_DESC"),  false,  Validator<bool>()); }
+    void AddOptions(OptionsDB& db) {
+        db.Add("verbose-sitrep", UserStringNop("OPTIONS_DB_VERBOSE_SITREP_DESC"),  false,  Validator<bool>());
+        db.Add<std::string>("hidden-sitrep-templates", UserStringNop("OPTIONS_DB_HIDDEN_SITREP_TEMPLATES_DESC"), "");
+        db.Add("UI.sitrep-icon-size", UserStringNop("OPTIONS_DB_UI_SITREP_HEIGHT"), 16, RangedValidator<int>(12, 32));
+    }
     bool temp_bool = RegisterOptions(&AddOptions);
+    
+    GG::X GetIconWidth()
+    { return GG::X(GetOptionsDB().Get<int>("UI.sitrep-icon-size")); }
 
     void HandleLinkClick(const std::string& link_type, const std::string& data) {
         using boost::lexical_cast;
@@ -127,6 +132,34 @@ namespace {
         return retval;
     }
 
+    std::set<std::string> HiddenSitRepTemplateStringsFromOptions() {
+        std::set<std::string> result;
+        std::string saved_template_string = GetOptionsDB().Get<std::string>("hidden-sitrep-templates");
+
+        // Split a space-delimited sequence of strings.
+        std::istringstream ss(saved_template_string);
+        std::copy(
+            std::istream_iterator<std::string>(ss),
+            std::istream_iterator<std::string>(),
+            std::inserter(result, result.begin())
+        );
+        return result;
+    }
+
+    void SetHiddenSitRepTemplateStringsInOptions(const std::set<std::string>& set) {
+        std::stringstream ss;
+
+        // Join a set of strings into a space-delimited sequence of strings.
+        std::copy(
+            set.begin(),
+            set.end(),
+            std::ostream_iterator<std::string>(ss, " ")
+        );
+
+        GetOptionsDB().Set<std::string>("hidden-sitrep-templates", ss.str());
+        GetOptionsDB().Commit();
+    }
+
     class ColorEmpire : public LinkDecorator {
     public:
         virtual std::string Decorate(const std::string& target, const std::string& content) const {
@@ -185,13 +218,13 @@ namespace {
         void            DoLayout() {
             if (!m_initialized)
                 return;
-            const GG::Y ICON_HEIGHT(Value(ICON_WIDTH));
+            GG::Y ICON_HEIGHT(Value(GetIconWidth()));
 
             GG::X left(GG::X0);
             GG::Y bottom(ClientHeight());
 
-            m_icon->SizeMove(GG::Pt(left, bottom/2 - ICON_HEIGHT/2), GG::Pt(left + ICON_WIDTH, bottom/2 + ICON_HEIGHT/2));
-            left += ICON_WIDTH + ICON_RIGHT_MARGIN;
+            m_icon->SizeMove(GG::Pt(left, bottom/2 - ICON_HEIGHT/2), GG::Pt(left + GetIconWidth(), bottom/2 + ICON_HEIGHT/2));
+            left += GetIconWidth() + ICON_RIGHT_MARGIN;
 
             m_link_text->SizeMove(GG::Pt(left, GG::Y0), GG::Pt(ClientWidth(), bottom));
         }
@@ -208,8 +241,8 @@ namespace {
             m_icon = new GG::StaticGraphic(icon, GG::GRAPHIC_FITGRAPHIC | GG::GRAPHIC_PROPSCALE);
             AttachChild(m_icon);
 
-            m_link_text = new LinkText(GG::X0, GG::Y0, GG::X1,
-                                       m_sitrep_entry.GetText() + " ", ClientUI::GetFont(),
+            m_link_text = new LinkText(GG::X0, GG::Y0, GG::X1, m_sitrep_entry.GetText() + " ", 
+                                       ClientUI::GetFont(std::max(1.0*ClientUI::Pts(), 0.75*GetOptionsDB().Get<int>("UI.sitrep-icon-size"))),
                                        GG::FORMAT_LEFT | GG::FORMAT_VCENTER | GG::FORMAT_WORDBREAK, ClientUI::TextColor());
             m_link_text->SetDecorator(VarText::EMPIRE_ID_TAG, new ColorEmpire());
             AttachChild(m_link_text);
@@ -269,7 +302,8 @@ SitRepPanel::SitRepPanel(GG::X x, GG::Y y, GG::X w, GG::Y h) :
     m_prev_turn_button(0),
     m_next_turn_button(0),
     m_last_turn_button(0),
-    m_showing_turn(INVALID_GAME_TURN)
+    m_showing_turn(INVALID_GAME_TURN),
+    m_hidden_sitrep_templates(HiddenSitRepTemplateStringsFromOptions())
 {
     Sound::TempUISoundDisabler sound_disabler;
     SetChildClippingMode(DontClip);
@@ -485,6 +519,8 @@ void SitRepPanel::FilterClicked() {
             m_hidden_sitrep_templates.erase(selected_template_string);
         }
     }
+    SetHiddenSitRepTemplateStringsInOptions(m_hidden_sitrep_templates);
+
     Update();
 }
 

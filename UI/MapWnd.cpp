@@ -37,6 +37,7 @@
 #include "../util/Random.h"
 #include "../util/ModeratorAction.h"
 #include "../util/ScopedTimer.h"
+#include "../universe/Enums.h"
 #include "../universe/Fleet.h"
 #include "../universe/Planet.h"
 #include "../universe/Predicates.h"
@@ -54,6 +55,7 @@
 #include <boost/graph/graph_concepts.hpp>
 
 #include <GG/DrawUtil.h>
+#include <GG/PtRect.h>
 #include <GG/MultiEdit.h>
 #include <GG/WndEvent.h>
 #include <GG/Layout.h>
@@ -63,8 +65,8 @@
 #include <valarray>
 
 namespace {
-    const double    ZOOM_STEP_SIZE = std::pow(2.0, 1.0/3.0);
-    const double    ZOOM_IN_MAX_STEPS = 9.0;
+    const double    ZOOM_STEP_SIZE = std::pow(2.0, 1.0/4.0);
+    const double    ZOOM_IN_MAX_STEPS = 12.0;
     const double    ZOOM_IN_MIN_STEPS = -7.0;   // negative zoom steps indicates zooming out
     const double    ZOOM_MAX = std::pow(ZOOM_STEP_SIZE, ZOOM_IN_MAX_STEPS);
     const double    ZOOM_MIN = std::pow(ZOOM_STEP_SIZE, ZOOM_IN_MIN_STEPS);
@@ -92,6 +94,7 @@ namespace {
         db.Add("UI.galaxy-gas-background",          UserStringNop("OPTIONS_DB_GALAXY_MAP_GAS"),                     true,       Validator<bool>());
         db.Add("UI.galaxy-starfields",              UserStringNop("OPTIONS_DB_GALAXY_MAP_STARFIELDS"),              true,       Validator<bool>());
         db.Add("UI.show-galaxy-map-scale",          UserStringNop("OPTIONS_DB_GALAXY_MAP_SCALE_LINE"),              true,       Validator<bool>());
+        db.Add("UI.show-galaxy-map-scale-circle",   UserStringNop("OPTIONS_DB_GALAXY_MAP_SCALE_CIRCLE"),            false,      Validator<bool>());
         db.Add("UI.show-galaxy-map-zoom-slider",    UserStringNop("OPTIONS_DB_GALAXY_MAP_ZOOM_SLIDER"),             false,      Validator<bool>());
         db.Add("UI.optimized-system-rendering",     UserStringNop("OPTIONS_DB_OPTIMIZED_SYSTEM_RENDERING"),         true,       Validator<bool>());
         db.Add("UI.starlane-thickness",             UserStringNop("OPTIONS_DB_STARLANE_THICKNESS"),                 2.0,        RangedStepValidator<double>(0.25, 0.25, 10.0));
@@ -112,6 +115,7 @@ namespace {
 
         db.Add("UI.system-circles",                 UserStringNop("OPTIONS_DB_UI_SYSTEM_CIRCLES"),                  true,       Validator<bool>());
         db.Add("UI.system-circle-size",             UserStringNop("OPTIONS_DB_UI_SYSTEM_CIRCLE_SIZE"),              1.0,        RangedStepValidator<double>(0.125, 1.0, 2.5));
+        db.Add("UI.show-unexplored_system_overlay", UserStringNop("OPTIONS_DB_UI_SYSTEM_UNEXPLORED_OVERLAY"),       true,       Validator<bool>());
 
         db.Add("UI.system-tiny-icon-size-threshold",UserStringNop("OPTIONS_DB_UI_SYSTEM_TINY_ICON_SIZE_THRESHOLD"), 10,         RangedValidator<int>(1, 16));
         db.Add("UI.system-selection-indicator-size",UserStringNop("OPTIONS_DB_UI_SYSTEM_SELECTION_INDICATOR_SIZE"), 1.625,      RangedStepValidator<double>(0.125, 0.5, 5));
@@ -148,6 +152,9 @@ namespace {
         Hotkey::AddHotkey("map.zoom_next_fleet",      UserStringNop("HOTKEY_MAP_ZOOM_NEXT_FLEET"),      GG::GGK_g,          GG::MOD_KEY_CTRL);
         Hotkey::AddHotkey("map.zoom_prev_idle_fleet", UserStringNop("HOTKEY_MAP_ZOOM_PREV_IDLE_FLEET"), GG::GGK_UNKNOWN);
         Hotkey::AddHotkey("map.zoom_next_idle_fleet", UserStringNop("HOTKEY_MAP_ZOOM_NEXT_IDLE_FLEET"), GG::GGK_UNKNOWN);
+
+        Hotkey::AddHotkey("map.toggle_scale_line",    UserStringNop("HOTKEY_MAP_TOGGLE_SCALE_LINE"),    GG::GGK_UNKNOWN);
+        Hotkey::AddHotkey("map.toggle_scale_circle",  UserStringNop("HOTKEY_MAP_TOGGLE_SCALE_CIRCLE"),  GG::GGK_UNKNOWN);
 
         Hotkey::AddHotkey("cut",                      UserStringNop("HOTKEY_CUT"),            GG::GGK_x,  GG::MOD_KEY_CTRL);
         Hotkey::AddHotkey("copy",                     UserStringNop("HOTKEY_COPY"),           GG::GGK_c,  GG::MOD_KEY_CTRL);
@@ -266,6 +273,12 @@ namespace {
 
     void PlayTurnButtonClickSound()
     { Sound::GetSound().PlaySound(GetOptionsDB().Get<std::string>("UI.sound.turn-button-click"), true); }
+
+    bool ToggleBoolOption(const std::string& option_name) {
+        bool initially_enabled = GetOptionsDB().Get<bool>(option_name);
+        GetOptionsDB().Set(option_name, !initially_enabled);
+        return !initially_enabled;
+    }
 }
 
 
@@ -284,7 +297,8 @@ public:
     {
         m_label = new ShadowedTextControl("", ClientUI::GetFont(), ClientUI::TextColor());
         AttachChild(m_label);
-        Update(1.0);
+        std::set<int> dummy = std::set<int>();
+        Update(1.0, dummy, INVALID_OBJECT_ID);
         GG::Connect(GetOptionsDB().OptionChangedSignal("UI.show-galaxy-map-scale"), &MapScaleLine::UpdateEnabled, this);
         UpdateEnabled();
     }
@@ -322,7 +336,47 @@ public:
         glLineWidth(1.0);
     }
 
-    void Update(double zoom_factor) {
+    GG::X GetLength() {
+        return m_line_length;
+    }
+
+    void Update(double zoom_factor, std::set<int>& fleet_ids, int sel_system_id) {
+        // The uu length of the map scale line is generally adjusted in this routine up or down by factors of two or five as
+        // the zoom_factor changes, so that it's pixel length on the screen is kept to a reasonable distance.  We also add
+        // additional stopping points for the map scale to augment the usefulness of the linked map scale circle (whose
+        // radius is the same as the map scale length).  These additional stopping points include the speeds and detection
+        // ranges of any selected fleets, and the detection ranges of all planets in the currently selected system, 
+        // provided such values are at least 20 uu.
+        
+        // get selected fleet speeds and detection ranges
+        std::set<double> fixed_distances;
+        for (std::set<int>::iterator it = fleet_ids.begin(); it != fleet_ids.end(); ++it) {
+            if (TemporaryPtr<const Fleet> fleet = GetFleet(*it)) {
+                if (fleet->Speed() > 20)
+                    fixed_distances.insert(fleet->Speed());
+                for (std::set< int >::iterator ship_it = fleet->ShipIDs().begin(); ship_it != fleet->ShipIDs().end(); ship_it++){
+                    if ( TemporaryPtr< Ship > ship = GetShip(*ship_it)) {
+                        const float ship_range = ship->CurrentMeterValue(METER_DETECTION);
+                        if (ship_range > 20)
+                            fixed_distances.insert(ship_range);
+                        const float ship_speed = ship->Speed();
+                        if (ship_speed > 20)
+                            fixed_distances.insert(ship_speed);
+                    }
+                }
+            }
+        }
+        // get detection ranges for planets in the selected system (if any)
+        if (const TemporaryPtr<const System> system = GetSystem(sel_system_id)) {
+            for (std::set< int >::iterator pid_it = system->PlanetIDs().begin(); pid_it != system->PlanetIDs().end(); pid_it++) {
+                if (const TemporaryPtr< Planet > planet = GetPlanet(*pid_it)) {
+                    const float planet_range = planet->CurrentMeterValue(METER_DETECTION);
+                    if (planet_range > 20)
+                        fixed_distances.insert(planet_range);
+                }
+            }
+        }
+
         zoom_factor = std::min(std::max(zoom_factor, ZOOM_MIN), ZOOM_MAX);  // sanity range limits to prevent divide by zero
         m_scale_factor = zoom_factor;
 
@@ -334,16 +388,51 @@ public:
 
         // select an actual shown length in universe units by reducing max_shown_length to a nice round number,
         // where nice round numbers are numbers beginning with 1, 2 or 5
+        // We start by getting the highest power of 10 that is less than the max_shown_length,
+        // and then we step that initial value up, either by a factor of 2 or 5 if that
+        // will still fit, or to one of the values taken from fleets and planets
+        // if they are at least as reat as the standard value but not larger than the max_shown_length
 
         // get appropriate power of 10
         double pow10 = floor(log10(max_shown_length));
-        double shown_length = std::pow(10.0, pow10);
+        double init_length = std::pow(10.0, pow10);
+        double shown_length = init_length;
 
+        // determin a preliminary shown length
         // see if next higher multiples of 5 or 2 can be used
         if (shown_length * 5.0 <= max_shown_length)
             shown_length *= 5.0;
         else if (shown_length * 2.0 <= max_shown_length)
             shown_length *= 2.0;
+        
+        // DebugLogger()  << "MapScaleLine::Update maxLen: " << max_shown_length
+        //                        << "; init_length: " << init_length
+        //                        << "; shown_length: " << shown_length;
+
+        // for (std::set<double>::iterator it = fixed_distances.begin(); it != fixed_distances.end(); ++it) {
+        //     DebugLogger()  << " MapScaleLine::Update fleet speed: " << *it;
+        // }
+        
+        // if there are additional scale steps to check (from fleets & planets)
+        if (!fixed_distances.empty()) {
+            // check if the set of fixed distances includes a value that is in between the max_shown_length
+            // and one zoom step smaller than the max shown length.  If so, use that for the shown_length;
+            // otherwise, check if the set of fixed distances includes a value that is greater than the
+            // shown_length determined above but still less than the max_shown_length, and if so then use that value.
+            // Note: if the ZOOM_STEP_SIZE is too large, then potential values in the set of fixed distances
+            // might get skipped over.
+            std::set<double>::iterator distance_ub = fixed_distances.upper_bound(max_shown_length/ZOOM_STEP_SIZE);
+            if (distance_ub != fixed_distances.end() && *distance_ub <= max_shown_length) {
+                DebugLogger()  << " MapScaleLine::Update distance_ub: " << *distance_ub;
+                shown_length = *distance_ub;
+            } else {
+                distance_ub = fixed_distances.upper_bound(shown_length);
+                if (distance_ub != fixed_distances.end() && *distance_ub <= max_shown_length) {
+                    DebugLogger()  << " MapScaleLine::Update distance_ub: " << *distance_ub;
+                    shown_length = *distance_ub;
+                }
+            }
+        }
 
         // determine end of drawn scale line
         m_line_length = GG::X(static_cast<int>(shown_length * m_scale_factor));
@@ -1091,7 +1180,8 @@ MapWnd::MapWnd() :
     m_scale_line = new MapScaleLine(GG::X(LAYOUT_MARGIN),   GG::Y(LAYOUT_MARGIN) + m_toolbar->Height(),
                                     SCALE_LINE_MAX_WIDTH,   SCALE_LINE_HEIGHT);
     GG::GUI::GetGUI()->Register(m_scale_line);
-    m_scale_line->Update(ZoomFactor());
+    int sel_system_id = SidePanel::SystemID();
+    m_scale_line->Update(ZoomFactor(), m_selected_fleet_ids, sel_system_id);
     m_scale_line->Hide();
 
     // Zoom slider
@@ -1116,18 +1206,13 @@ MapWnd::MapWnd() :
     //////////////////
     // General Gamestate response signals
     //////////////////
-    Connect(ClientApp::GetApp()->EmpireEliminatedSignal,
-            &MapWnd::HandleEmpireElimination,   this);
-    Connect(FleetUIManager::GetFleetUIManager().ActiveFleetWndChangedSignal,
-            &MapWnd::SelectedFleetsChanged,     this);
-    Connect(FleetUIManager::GetFleetUIManager().ActiveFleetWndSelectedFleetsChangedSignal,
-            &MapWnd::SelectedFleetsChanged,     this);
-    Connect(FleetUIManager::GetFleetUIManager().ActiveFleetWndSelectedShipsChangedSignal,
-            &MapWnd::SelectedShipsChanged,      this);
-    Connect(FleetUIManager::GetFleetUIManager().FleetRightClickedSignal,
-            &MapWnd::FleetRightClicked,         this);
-    Connect(FleetUIManager::GetFleetUIManager().ShipRightClickedSignal,
-            &MapWnd::ShipRightClicked,          this);
+    FleetUIManager& fm = FleetUIManager::GetFleetUIManager();
+    Connect(ClientApp::GetApp()->EmpireEliminatedSignal,    &MapWnd::HandleEmpireElimination,   this);
+    Connect(fm.ActiveFleetWndChangedSignal,                 &MapWnd::SelectedFleetsChanged,     this);
+    Connect(fm.ActiveFleetWndSelectedFleetsChangedSignal,   &MapWnd::SelectedFleetsChanged,     this);
+    Connect(fm.ActiveFleetWndSelectedShipsChangedSignal,    &MapWnd::SelectedShipsChanged,      this);
+    Connect(fm.FleetRightClickedSignal,                     &MapWnd::FleetRightClicked,         this);
+    Connect(fm.ShipRightClickedSignal,                      &MapWnd::ShipRightClicked,          this);
 
     DoLayout();
 
@@ -1460,10 +1545,33 @@ void MapWnd::RenderSystems() {
         fog_scanline_spacing = static_cast<float>(GetOptionsDB().Get<double>("UI.system-fog-of-war-spacing"));
     }
 
+    const double TWO_PI = 2.0*3.14159;
+    if (GetOptionsDB().Get<bool>("UI.show-galaxy-map-scale") && GetOptionsDB().Get<bool>("UI.show-galaxy-map-scale-circle") 
+            && SidePanel::SystemID() != INVALID_OBJECT_ID) 
+    {
+        glPushMatrix();
+        glLoadIdentity();
+        glDisable(GL_TEXTURE_2D);
+        glEnable(GL_LINE_SMOOTH);
+        glLineWidth(2.0);
+        GG::X radius = m_scale_line->GetLength();
+        TemporaryPtr< System > selected_system = GetSystem(SidePanel::SystemID());
+        GG::Pt circle_centre = ScreenCoordsFromUniversePosition(selected_system->X(), selected_system->Y());
+        GG::Pt ul = circle_centre - GG::Pt(radius, GG::Y(Value(radius)));
+        GG::Pt lr = circle_centre + GG::Pt(radius, GG::Y(Value(radius)));
+        GG::Clr circle_colour = GG::CLR_WHITE;
+        circle_colour.a = 128;
+        glColor(circle_colour);
+        CircleArc(ul, lr,0.0, TWO_PI, false);
+        glDisable(GL_LINE_SMOOTH);
+        glEnable(GL_TEXTURE_2D);
+        glPopMatrix();
+        glLineWidth(1.0f);
+    }
+
     if (fog_scanlines || circles) {
         glPushMatrix();
         glLoadIdentity();
-        const double TWO_PI = 2.0*3.14159;
         glDisable(GL_TEXTURE_2D);
         glEnable(GL_LINE_SMOOTH);
         glLineWidth(1.5f);
@@ -1999,13 +2107,13 @@ void MapWnd::MouseWheel(const GG::Pt& pt, int move, GG::Flags<GG::ModKey> mod_ke
         Zoom(move, pt);
 }
 
-void MapWnd::KeyPress ( GG::Key key, boost::uint32_t key_code_point, GG::Flags< GG::ModKey > mod_keys ) {
+void MapWnd::KeyPress(GG::Key key, boost::uint32_t key_code_point, GG::Flags<GG::ModKey> mod_keys) {
     if (key == GG::GGK_LSHIFT || key == GG::GGK_RSHIFT) {
         ReplotProjectedFleetMovement(mod_keys & GG::MOD_KEY_SHIFT);
     }
 }
 
-void MapWnd::KeyRelease ( GG::Key key, boost::uint32_t key_code_point, GG::Flags< GG::ModKey > mod_keys ) {
+void MapWnd::KeyRelease(GG::Key key, boost::uint32_t key_code_point, GG::Flags<GG::ModKey> mod_keys) {
     if (key == GG::GGK_LSHIFT || key == GG::GGK_RSHIFT) {
         ReplotProjectedFleetMovement(mod_keys & GG::MOD_KEY_SHIFT);
     }
@@ -3870,8 +3978,9 @@ void MapWnd::SetZoom(double steps_in, bool update_slide, const GG::Pt& position)
 
     MoveTo(move_to_pt - GG::Pt(AppWidth(), AppHeight()));
 
+    int sel_system_id = SidePanel::SystemID();
     if (m_scale_line)
-        m_scale_line->Update(ZoomFactor());
+        m_scale_line->Update(ZoomFactor(), m_selected_fleet_ids, sel_system_id);
     if (update_slide && m_zoom_slider)
         m_zoom_slider->SlideTo(m_zoom_steps_in);
 
@@ -4522,36 +4631,44 @@ void MapWnd::Sanitize() {
 }
 
 bool MapWnd::ReturnToMap() {
-    if (m_sitrep_panel->Visible())
+    bool some_subscreen_was_visible = false;
+
+    if (m_sitrep_panel->Visible()) {
         ToggleSitRep();
+        some_subscreen_was_visible = true;
+    }
 
-    if (m_research_wnd->Visible())
+    if (m_research_wnd->Visible()) {
         ToggleResearch();
+        some_subscreen_was_visible = true;
+    }
 
-    if (m_design_wnd->Visible())
+    if (m_design_wnd->Visible()) {
         ToggleDesign();
+        some_subscreen_was_visible = true;
+    }
 
-    if (m_production_wnd->Visible())
+    if (m_production_wnd->Visible()) {
         ToggleProduction();
+        some_subscreen_was_visible = true;
+    }
+
+    if (!some_subscreen_was_visible) {
+        // close fleets window if open
+        FleetUIManager& fm = FleetUIManager::GetFleetUIManager();
+        GG::Wnd* active_fleet_wnd = fm.ActiveFleetWnd();
+        if (active_fleet_wnd) {
+            fm.CloseAll();
+        } else {
+            // else close sidepanel if open
+            SelectSystem(INVALID_OBJECT_ID);
+        }
+    }
 
     return true;
 }
 
 bool MapWnd::EndTurn() {
-    DebugLogger() << "MapWnd::EndTurn";
-    const Empire *empire = GetEmpire(HumanClientApp::GetApp()->EmpireID());
-    if (empire) {
-        double RP = empire->ResourceProduction(RE_RESEARCH);
-        double PP = empire->ResourceProduction(RE_INDUSTRY);
-        int turn_number = CurrentTurn();
-        float ratio = (RP/(PP+0.0001));
-        const GG::Clr color = empire->Color();
-        DebugLogger() << "Current Output (turn " << turn_number << ") RP/PP: " << ratio << " (" << RP << "/" << PP << ")";
-        DebugLogger() << "EmpireColors: " << static_cast<int>(color.r)
-                                            << " " << static_cast<int>(color.g)
-                                            << " " << static_cast<int>(color.b)
-                                            << " " << static_cast<int>(color.a);
-    }
     HumanClientApp::GetApp()->StartTurn();
     return true;
 }
@@ -5214,11 +5331,14 @@ bool MapWnd::ZoomToNextOwnedSystem() {
 bool MapWnd::ZoomToPrevIdleFleet() {
     std::vector<int> vec = GetUniverse().Objects().FindObjectIDs(StationaryFleetVisitor(HumanClientApp::GetApp()->EmpireID()));
     std::vector<int>::iterator it = std::find(vec.begin(), vec.end(), m_current_fleet_id);
-    if (it == vec.end()) {
-        m_current_fleet_id = vec.empty() ? INVALID_OBJECT_ID : vec.back();
-    } else {
-        m_current_fleet_id = it == vec.begin() ? vec.back() : *--it;
-    }
+    const std::set<int>&    destroyed_object_ids = GetUniverse().DestroyedObjectIds();
+    if (it != vec.begin())
+        --it;
+    else
+        it = vec.end();
+    while (it != vec.begin() && (it == vec.end() || destroyed_object_ids.find(*it) != destroyed_object_ids.end()))
+        --it;
+    m_current_fleet_id = it != vec.end() ? *it : vec.empty() ? INVALID_OBJECT_ID : vec.back();
 
     if (m_current_fleet_id != INVALID_OBJECT_ID) {
         CenterOnObject(m_current_fleet_id);
@@ -5231,13 +5351,12 @@ bool MapWnd::ZoomToPrevIdleFleet() {
 bool MapWnd::ZoomToNextIdleFleet() {
     std::vector<int> vec = GetUniverse().Objects().FindObjectIDs(StationaryFleetVisitor(HumanClientApp::GetApp()->EmpireID()));
     std::vector<int>::iterator it = std::find(vec.begin(), vec.end(), m_current_fleet_id);
-    if (it == vec.end()) {
-        m_current_fleet_id = vec.empty() ? INVALID_OBJECT_ID : vec.front();
-    } else {
-        std::vector<int>::iterator next_it = it;
-        ++next_it;
-        m_current_fleet_id = next_it == vec.end() ? vec.front() : *next_it;
-    }
+    const std::set<int>&    destroyed_object_ids = GetUniverse().DestroyedObjectIds();
+    if (it != vec.end())
+        ++it;
+    while (it != vec.end() && destroyed_object_ids.find(*it) != destroyed_object_ids.end())
+        ++it;
+    m_current_fleet_id = it != vec.end() ? *it : vec.empty() ? INVALID_OBJECT_ID : vec.front();
 
     if (m_current_fleet_id != INVALID_OBJECT_ID) {
         CenterOnObject(m_current_fleet_id);
@@ -5250,11 +5369,14 @@ bool MapWnd::ZoomToNextIdleFleet() {
 bool MapWnd::ZoomToPrevFleet() {
     std::vector<int> vec = GetUniverse().Objects().FindObjectIDs(OwnedVisitor<Fleet>(HumanClientApp::GetApp()->EmpireID()));
     std::vector<int>::iterator it = std::find(vec.begin(), vec.end(), m_current_fleet_id);
-    if (it == vec.end()) {
-        m_current_fleet_id = vec.empty() ? INVALID_OBJECT_ID : vec.back();
-    } else {
-        m_current_fleet_id = it == vec.begin() ? vec.back() : *--it;
-    }
+    const std::set<int>&    destroyed_object_ids = GetUniverse().DestroyedObjectIds();
+    if (it != vec.begin())
+        --it;
+    else
+        it = vec.end();
+    while (it != vec.begin() && (it == vec.end() || destroyed_object_ids.find(*it) != destroyed_object_ids.end()))
+        --it;
+    m_current_fleet_id = it != vec.end() ? *it : vec.empty() ? INVALID_OBJECT_ID : vec.back();
 
     if (m_current_fleet_id != INVALID_OBJECT_ID) {
         CenterOnObject(m_current_fleet_id);
@@ -5267,16 +5389,12 @@ bool MapWnd::ZoomToPrevFleet() {
 bool MapWnd::ZoomToNextFleet() {
     std::vector<int> vec = GetUniverse().Objects().FindObjectIDs(OwnedVisitor<Fleet>(HumanClientApp::GetApp()->EmpireID()));
     std::vector<int>::iterator it = std::find(vec.begin(), vec.end(), m_current_fleet_id);
-    if (it == vec.end()) {
-        m_current_fleet_id = vec.empty() ? INVALID_OBJECT_ID : vec.front();
-    } else {
-        std::vector<int>::iterator next_it = it;
-        ++next_it;
-        if (next_it == vec.end())
-            m_current_fleet_id = vec.front();
-        else
-            m_current_fleet_id = *next_it;
-    }
+    const std::set<int>&    destroyed_object_ids = GetUniverse().DestroyedObjectIds();
+    if (it != vec.end())
+        ++it;
+    while (it != vec.end() && destroyed_object_ids.find(*it) != destroyed_object_ids.end())
+        ++it;
+    m_current_fleet_id = it != vec.end() ? *it : vec.empty() ? INVALID_OBJECT_ID : vec.front();
 
     if (m_current_fleet_id != INVALID_OBJECT_ID) {
         CenterOnObject(m_current_fleet_id);
@@ -5355,6 +5473,15 @@ void MapWnd::ConnectKeyboardAcceleratorSignals() {
                                                                                                     new VisibleWindowCondition(this)));
     hkm->Connect(this, &MapWnd::ZoomToNextIdleFleet,    "map.zoom_next_idle_fleet", new OrCondition(new InvisibleWindowCondition(bl),
                                                                                                     new VisibleWindowCondition(this)));
+
+    boost::function<bool()> toggle_scale_line = boost::bind(&ToggleBoolOption, "UI.show-galaxy-map-scale");
+    hkm->Connect(toggle_scale_line,                     "map.toggle_scale_line",    new OrCondition(new InvisibleWindowCondition(bl),
+                                                                                                    new VisibleWindowCondition(this)));
+
+    boost::function<bool()> toggle_scale_circle = boost::bind(&ToggleBoolOption, "UI.show-galaxy-map-scale-circle");
+    hkm->Connect(toggle_scale_circle,                   "map.toggle_scale_circle",  new OrCondition(new InvisibleWindowCondition(bl),
+                                                                                                    new VisibleWindowCondition(this)));
+
 
     // these are general-use hotkeys, only connected here as a convenient location to do so once.
     hkm->Connect(GG::GUI::GetGUI(), &GG::GUI::CutFocusWndText,              "cut");

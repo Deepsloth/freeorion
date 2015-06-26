@@ -24,7 +24,7 @@ Internal use only:
 Classes:
 - ShipDesignCache: caches information used in this module. Only use the defined instance (variable name "Cache")
 - ShipDesigner: base class for all designs. Provides basic and general functionalities
-- ColonisationShipDesignerBaseClass: base class for all (specialised) colonisation ships which provides common functionalities
+- ColonisationShipDesignerBaseClass: base class for all colonisation ships which provides common functionalities
 - OutpostShipDesignerBaseClass: same but for outposter ships
 - TroopShipDesignerBaseClass: same but for troop ships
 - AdditionalSpecifications:  Defines all requirements we have for our designs such as minimum fuel or minimum speed.
@@ -33,16 +33,19 @@ global variables:
 - Cache: Instance of the ShipDesignCache class - all cached information is stored in here.
 """
 
-# TODO: add hull.detection to interface, then add scout class
+# TODO: Add limit on production cost based on the total PP output of the empire if possible (only military?)
+# TODO: Use distance to colonisable planets as a modifier to the rating of colonization/outposting ships
+# TODO: Use the distance to next colonisable planets as base for speed modifiers for troops/colo/outpost ships
+# TODO: For stable release, comment out the profiling functionality
 
 import freeOrionAIInterface as fo
 import FreeOrionAI as foAI
 import ColonisationAI
+import AIDependencies
 import copy
 import traceback
 import math
-from collections import Counter
-from collections import defaultdict
+from collections import Counter, defaultdict
 from freeorion_tools import print_error, UserString
 
 # Define meta classes for the ship parts
@@ -56,14 +59,16 @@ ENGINES = frozenset({fo.shipPartClass.speed})
 TROOPS = frozenset({fo.shipPartClass.troops})
 WEAPONS = frozenset({fo.shipPartClass.shortRange, fo.shipPartClass.missiles,
                      fo.shipPartClass.fighters, fo.shipPartClass.pointDefense})
-ALL_META_CLASSES = frozenset({WEAPONS, ARMOUR, DETECTION, FUEL, STEALTH, SHIELDS, COLONISATION, ENGINES, TROOPS})
+GENERAL = frozenset({fo.shipPartClass.general})
+ALL_META_CLASSES = frozenset({WEAPONS, ARMOUR, DETECTION, FUEL, STEALTH, SHIELDS,
+                              COLONISATION, ENGINES, TROOPS, GENERAL})
 
 # Prefixes for the test ship designs
 TESTDESIGN_NAME_BASE = "AI_TESTDESIGN"
 TESTDESIGN_NAME_HULL = TESTDESIGN_NAME_BASE+"_HULL"
 TESTDESIGN_NAME_PART = TESTDESIGN_NAME_BASE+"_PART"
 
-# Hardcoded preferred hullname for testdesigns - should be a hull without conditions but with maximum different slottypes
+# Hardcoded preferred hullname for testdesigns, should be a hull without conditions but with maximum different slottypes
 TESTDESIGN_PREFERRED_HULL = "SH_BASIC_MEDIUM"
 
 MISSING_REQUIREMENT_MULTIPLIER = -1000
@@ -346,7 +351,7 @@ class ShipDesignCache(object):
             idx = available_hulls.index(TESTDESIGN_PREFERRED_HULL)
             available_hulls[0], available_hulls[idx] = available_hulls[idx], available_hulls[0]
         except ValueError:
-            print "WARNING: Tried to use '%s' as testhull but it is not in available_hulls." % TESTDESIGN_PREFERRED_HULL,
+            print "WARNING: Tried to use '%s' as testhull but not in available_hulls." % TESTDESIGN_PREFERRED_HULL,
             print "Please update ShipDesignAI.py according to the new content."
             traceback.print_exc()
         testdesign_names = [get_shipdesign(design_id).name(False) for design_id in empire.allShipDesigns
@@ -409,9 +414,10 @@ class ShipDesignCache(object):
             res = fo.issueCreateShipDesignOrder(testdesign_name, "TESTPURPOSE ONLY", hull.name,
                                                 partlist, "", "fighter", False)
             if res:
-                print "Success: Added Test Design %s, with result %d" % (testdesign_name, res)
+                if verbose:
+                    print "Success: Added Test Design %s, with result %d" % (testdesign_name, res)
             else:
-                print "Error: When adding test design %s - got result %d but expected 1" % (testdesign_name, res)
+                print "Error: When adding test design %s - got result %s but expected 1" % (testdesign_name, res)
                 continue
 
         # 2. Cache the list of buildable ship hulls for each planet
@@ -548,7 +554,16 @@ class AdditionalSpecifications(object):
         self.minimum_structure = 1
         self.enemy_shields = 0
         self.enemy_weapon_strength = 0
-        self.enemy_mine_dmg = 0  # TODO: Implement the detection of enemy mine damage
+        self.expected_turns_till_fight = 2
+        current_turn = fo.currentTurn()
+        if current_turn < 50:
+            self.enemy_mine_dmg = 0  # TODO: Implement the detection of actual enemy mine damage
+        elif current_turn < 150:
+            self.enemy_mine_dmg = 2
+        elif current_turn < 230:
+            self.enemy_mine_dmg = 6
+        else:
+            self.enemy_mine_dmg = 14
         self.update_enemy(foAI.foAIstate.empire_standard_enemy)
 
     def update_enemy(self, enemy):
@@ -569,8 +584,8 @@ class AdditionalSpecifications(object):
         :returns: tuple (minFuel,minSpeed,enemyDmg,enemyShield,enemyMineDmg)
         """
         return ("minFuel: %s" % self.minimum_fuel, "minSpeed: %s" % self.minimum_speed,
-               "enemyDmg: %s" % self.enemy_weapon_strength, "enemyShields: %s" % self.enemy_shields,
-               "enemyMineDmg: %s" % self.enemy_mine_dmg)
+                "enemyDmg: %s" % self.enemy_weapon_strength, "enemyShields: %s" % self.enemy_shields,
+                "enemyMineDmg: %s" % self.enemy_mine_dmg)
 
 
 class ShipDesigner(object):
@@ -612,7 +627,7 @@ class ShipDesigner(object):
         self.hull = None            # hull object (not hullname!)
         self.partnames = []         # list of partnames (string)
         self.parts = []             # list of actual part objects
-        self.attacks = {}           # {damage:count}
+        self.attacks = {}           # {damage: count}
         self.structure = 0
         self.shields = 0
         self.fuel = 0
@@ -626,7 +641,13 @@ class ShipDesigner(object):
         self.pid = -1               # planetID for checks on production cost if not LocationInvariant.
         self.additional_specifications = AdditionalSpecifications()
         self.design_name_dict = {k: v for k, v in zip(self.NAME_THRESHOLDS,
-                                                      UserString(self.NAMETABLE, self.basename).split())}
+                                                      UserString(self.NAMETABLE, self.basename).splitlines())}
+        self.fuel_per_turn = 0
+        self.organic_growth = 0
+        self.maximum_organic_growth = 0
+        self.repair_per_turn = 0
+        self.asteroid_stealth = 0
+        self.solar_stealth = 0
 
     def evaluate(self):
         """ Return a rating for the design.
@@ -642,16 +663,30 @@ class ShipDesigner(object):
         # If we do not meet the requirements, we want to return a negative rating.
         # However, we also need to make sure, that the closer we are to requirements,
         # the better our rating is so the optimizing heuristic finds "the right way".
-        if self.fuel < self.additional_specifications.minimum_fuel:
-            rating += MISSING_REQUIREMENT_MULTIPLIER * (self.additional_specifications.minimum_fuel - self.fuel)
-        if self.speed < self.additional_specifications.minimum_speed:
-            rating += MISSING_REQUIREMENT_MULTIPLIER * (self.additional_specifications.minimum_speed - self.speed)
-        if self.structure < self.additional_specifications.minimum_structure:
-            rating += MISSING_REQUIREMENT_MULTIPLIER * (self.additional_specifications.minimum_structure - self.structure)
+        min_fuel = self._minimum_fuel()
+        min_speed = self._minimum_speed()
+        min_structure = self._minimum_structure()
+        if self.fuel < min_fuel:
+            rating += MISSING_REQUIREMENT_MULTIPLIER * (min_fuel - self.fuel)
+        if self.speed < min_speed:
+            rating += MISSING_REQUIREMENT_MULTIPLIER * (min_speed - self.speed)
+        estimated_structure = (self.structure +
+                               self.organic_growth * self.additional_specifications.expected_turns_till_fight)
+        if estimated_structure < self._minimum_structure():
+            rating += MISSING_REQUIREMENT_MULTIPLIER * (min_structure - estimated_structure)
         if rating < 0:
             return rating
         else:
             return self._rating_function()
+
+    def _minimum_fuel(self):
+        return self.additional_specifications.minimum_fuel
+
+    def _minimum_speed(self):
+        return self.additional_specifications.minimum_speed
+
+    def _minimum_structure(self):
+        return self.additional_specifications.minimum_structure
 
     def _rating_function(self):
         """Rate the design according to current hull/part combo.
@@ -676,6 +711,12 @@ class ShipDesigner(object):
         self.colonisation = -1
         self.production_cost = 9999999
         self.production_time = 1
+        self.fuel_per_turn = 0
+        self.organic_growth = 0
+        self.maximum_organic_growth = 0
+        self.repair_per_turn = 0
+        self.asteroid_stealth = 0
+        self.solar_stealth = 0
 
     def update_hull(self, hullname):
         """Set hull of the design.
@@ -729,6 +770,12 @@ class ShipDesigner(object):
         self.production_cost = local_cost_cache[self.hull.name]
         self.production_time = local_time_cache[self.hull.name]
         self.colonisation = -1  # -1 as 0 corresponds to outpost pod (capacity = 0)
+        self.fuel_per_turn = 0
+        self.organic_growth = 0
+        self.maximum_organic_growth = 0
+        self.repair_per_turn = 0
+        self.asteroid_stealth = 0
+        self.solar_stealth = 0
 
         # read out part stats
         shield_counter = cloak_counter = detection_counter = colonization_counter = 0  # to deal with Non-stacking parts
@@ -774,7 +821,8 @@ class ShipDesigner(object):
                     self.stealth += capacity
                 else:
                     self.stealth = 0
-            # TODO: (Hardcode?) extra effect modifiers such as the transspatial drive or multispectral shields, ...
+
+        self._apply_hardcoded_effects()
 
         if self.species and not ignore_species:
             # TODO: Add troop modifiers once added
@@ -782,6 +830,51 @@ class ShipDesigner(object):
             self.shields = foAI.foAIstate.weight_shields(self.shields, shields_grade)
             if self.attacks:
                 self.attacks = foAI.foAIstate.weight_attacks(self.attacks, weapons_grade)
+
+    def _apply_hardcoded_effects(self):
+        """Update stats that can not be read out by the AI yet, i.e. applied by effects.
+
+        This function should contain *all* hardcoded effects for hulls/parts to be considered by the AI
+        to make sure we can easily adjust the values for future balance changes or after implementing a
+        method to read out all stats.
+        """
+        def parse_tokens(tokendict):
+            """Adjust design stats according to the token dict key-value pairs.
+
+            :param tokendict: tokens and values
+            :type tokendict: dict
+            """
+            for token, value in tokendict.items():
+                if token == AIDependencies.REPAIR_PER_TURN:
+                    self.repair_per_turn += min(value, self.structure)
+                elif token == AIDependencies.FUEL_PER_TURN:
+                    self.fuel_per_turn = max(self.fuel_per_turn+value, self.fuel)
+                elif token == AIDependencies.STEALTH_MODIFIER:
+                    if not (AIDependencies.NO_EFFECT_WITH_CLOAKS in tokendict.get(AIDependencies.STACKING_RULES, [])
+                            and self._partclass_in_design(STEALTH)):
+                        self.stealth += value
+                elif token == AIDependencies.ASTEROID_STEALTH:
+                    self.asteroid_stealth += value
+                elif token == AIDependencies.SHIELDS:
+                    self.shields += value
+                elif token == AIDependencies.DETECTION:
+                    self.detection += value
+                elif token == AIDependencies.ORGANIC_GROWTH:
+                    self.organic_growth += value[0]
+                    self.maximum_organic_growth += value[1]
+                elif token == AIDependencies.SOLAR_STEALTH:
+                    self.solar_stealth = max(self.solar_stealth, value)
+            if AIDependencies.DETECTION not in tokendict:
+                self.detection += AIDependencies.BASE_DETECTION
+
+        if self.hull.name not in AIDependencies.HULL_EFFECTS:
+            self.detection += AIDependencies.BASE_DETECTION
+        else:
+            parse_tokens(AIDependencies.HULL_EFFECTS[self.hull.name])
+
+        for partname in set(self.partnames):
+            if partname in AIDependencies.PART_EFFECTS:
+                parse_tokens(AIDependencies.PART_EFFECTS[partname])
 
     def add_design(self, verbose=False):
         """Add a real (i.e. gameobject) ship design of the current configuration.
@@ -820,7 +913,7 @@ class ShipDesigner(object):
             if verbose:
                 print "Success: Added Design %s, with result %d" % (design_name, res)
         else:
-            print "Failure: Tried to add design %s but returned %d, expected 1" % (design_name, res)
+            print "Failure: Tried to add design %s but returned %s, expected 1" % (design_name, res)
             return None
         new_id = _get_design_by_name(design_name).id
         if new_id:
@@ -1156,7 +1249,7 @@ class ShipDesigner(object):
         empire_initials = empire_name[:1] + empire_name[-1:]
         rating = self._calc_rating_for_name()
         basename = next((name for (maxRating, name) in sorted(self.design_name_dict.items(), reverse=True)
-                        if rating > maxRating), self.__class__.basename)
+                        if rating >= maxRating), self.__class__.basename)
 
         def design_name():
             """return the design name based on the name_template"""
@@ -1178,6 +1271,44 @@ class ShipDesigner(object):
         self.update_stats(ignore_species=True)
         return self.structure
 
+    def _adjusted_production_cost(self):
+        """Return a production cost adjusted by the number of ships we have.
+
+        Building one warship of rating 2R and cost 2C is effectively cheaper than building 2 warships of rating R and
+        cost C due to fleet upkeep considerations even if they have the same raw rating/cost ratio.
+        The significance of this fleet upkeep efficiency increases with the raw fleet upkeep rate, with the expected
+        lifetime of the ship under consideration (i.e., with a longer expected lifespan it will affect the future
+        construction of a greater number of ships), and it also increases with the number of ships of this design
+        expected to be created. In the calculation below, the empire's current total shipcount is taken as a rough proxy
+        for both of the duration and extent factors.
+        Note: This same sort of adjustment would be valid for troop ships, could theoretically have some applicability
+        to scout ships since there could conceivably be a tradeoff for more scout ships of lower rating/range, but
+        would really not be applicable to colony ships since in that case there is really not a potential tradeoff
+        between number of ships and capacity.
+
+        :return: adjusted production cost
+        :rtype: float
+        """
+        # TODO: Consider total pp production output as additional factor
+        # TODO: Rethink about math and maybe work out a more accurate formula
+        return self.production_cost**(1/(1+foAI.foAIstate.shipCount * AIDependencies.SHIP_UPKEEP))
+
+    def _effective_fuel(self):
+        """Return the number of turns the ship can move without refueling."""
+        return min(self.fuel / max(1-self.fuel_per_turn, 0.001), 10)
+
+    def _effective_mine_damage(self):
+        return self.additional_specifications.enemy_mine_dmg -self.repair_per_turn
+
+    def _partclass_in_design(self, partclass):
+        """Check if partclass is used in current design.
+
+        :param partclass: One of the meta partclasses
+        :type partclass: frozenset
+        :rtype: bool
+        """
+        return any(part.partClass in partclass for part in self.parts)
+
 
 class MilitaryShipDesigner(ShipDesigner):
     """Class that implements military designs.
@@ -1185,7 +1316,13 @@ class MilitaryShipDesigner(ShipDesigner):
     Extends __init__()
     Overrides _rating_function()
     Overrides _starting_guess()
+    Overrides _calc_rating_for_name()
     """
+    # TODO: Consider subclassing into small/big ships.
+    # While big flagships are good in one-on-one situations, we may want to consider building many small ships to support
+    # them efficiently and act as decoys and anti-decoy-weapon in the fleet. Before doing so, changes need to be done
+    # to how the AI assemmbles its military fleets.
+
     basename = "Warship"
     description = "Military Ship"
     useful_part_classes = ARMOUR | WEAPONS | SHIELDS | FUEL | ENGINES
@@ -1194,22 +1331,32 @@ class MilitaryShipDesigner(ShipDesigner):
 
     NAMETABLE = "AI_SHIPDESIGN_NAME_MILITARY"
     NAME_THRESHOLDS = sorted([0, 100, 250, 500, 1000, 2500, 5000, 7500, 10000,
-                              15000, 20000, 25000, 30000, 35000, 40000, 45000, 50000, 60000])
+                              15000, 20000, 25000, 30000, 35000, 40000, 50000, 70000, 1000000])
 
     def __init__(self):
         ShipDesigner.__init__(self)
         self.additional_specifications.minimum_fuel = 1
         self.additional_specifications.minimum_speed = 30
+        self.additional_specifications.expected_turns_till_fight = 10 if fo.currentTurn() < 50 else 5
 
     def _rating_function(self):
         # TODO: Find a better way to determine the value of speed and fuel
+        # Generally, the only relevant damage is that which gets through the enemy shields.
+        # However, even if we do not get through the enemy shields at all, we want to make sure we have ships with
+        # fighting capability to deal with weaker enemy ships, troopers and so on. But this is only meant as last resort
+        # and any design that actually deals damage through shields is to be prefered, i.e. should get a better rating.
+        total_dmg = max(self._total_dmg_vs_shields(), self._total_dmg() / 1000)
+        if total_dmg <= 0:
+            return INVALID_DESIGN_RATING
         enemy_dmg = self.additional_specifications.enemy_weapon_strength
-        total_dmg = max(self._total_dmg_vs_shields(), 0.1)
         shield_factor = max(enemy_dmg / max(0.01, enemy_dmg - self.shields), 1)
-        effective_structure = self.structure * shield_factor
+        expected_growth = min(self.additional_specifications.expected_turns_till_fight * self.organic_growth,
+                              self.maximum_organic_growth)
+        remaining_growth = self.maximum_organic_growth - expected_growth
+        effective_structure = (self.structure + expected_growth + remaining_growth/5) * shield_factor
         speed_factor = 1 + 0.003*(self.speed - 85)
-        fuel_factor = 1 + 0.03 * (self.fuel - self.additional_specifications.minimum_fuel) ** 0.5
-        return max(total_dmg, 0.1) * effective_structure * speed_factor * fuel_factor / self.production_cost
+        fuel_factor = 1 + 0.03*(self._effective_fuel() - self._minimum_fuel())**0.5
+        return total_dmg * effective_structure * speed_factor * fuel_factor / self._adjusted_production_cost()
 
     def _starting_guess(self, available_parts, num_slots):
         # for military ships, our primary rating function is given by
@@ -1281,13 +1428,12 @@ class TroopShipDesignerBaseClass(ShipDesigner):
 
     def __init__(self):
         ShipDesigner.__init__(self)
-        self.additional_specifications.minimum_structure = self.additional_specifications.enemy_mine_dmg * 2
 
     def _rating_function(self):
         if self.troops == 0:
             return INVALID_DESIGN_RATING
         else:
-            return self.troops/self.production_cost
+            return self.troops/self._adjusted_production_cost()
 
     def _starting_guess(self, available_parts, num_slots):
         # fill completely with biggest troop pods. If none are available for this slot type, leave empty.
@@ -1337,14 +1483,17 @@ class StandardTroopShipDesigner(TroopShipDesignerBaseClass):
     """
     basename = "StormTroopers"
     description = "Ship designed for the invasion of enemy planets"
-    useful_part_classes = TROOPS
+    useful_part_classes = TROOPS | ARMOUR
     NAMETABLE = "AI_SHIPDESIGN_NAME_TROOPER_STANDARD"
-    NAME_THRESHOLDS = sorted([0])
+    NAME_THRESHOLDS = sorted([0, 6, 14])
 
     def __init__(self):
         TroopShipDesignerBaseClass.__init__(self)
         self.additional_specifications.minimum_speed = 30
         self.additional_specifications.minimum_fuel = 2
+
+    def _minimum_structure(self):
+        return self._effective_mine_damage() + 1
 
 
 class ColonisationShipDesignerBaseClass(ShipDesigner):
@@ -1547,7 +1696,7 @@ class OrbitalDefenseShipDesigner(ShipDesigner):
         if self.speed > 10:
             return INVALID_DESIGN_RATING
         total_dmg = self._total_dmg_vs_shields()
-        return (1+total_dmg*self.structure)/self.production_cost
+        return (1+total_dmg*self.structure)/self._adjusted_production_cost()
 
     def _calc_rating_for_name(self):
         self.update_stats(ignore_species=True)
@@ -1558,7 +1707,7 @@ class ScoutShipDesigner(ShipDesigner):
     """Scout ship class"""
     basename = "Scout"
     description = "For exploration and reconnaissance"
-    useful_part_classes = DETECTION | FUEL
+    useful_part_classes = DETECTION | FUEL | ENGINES
     NAMETABLE = "AI_SHIPDESIGN_NAME_SCOUT"
     NAME_THRESHOLDS = sorted([0])
     filter_useful_parts = True
@@ -1572,7 +1721,53 @@ class ScoutShipDesigner(ShipDesigner):
     def _rating_function(self):
         if not self.detection:
             return INVALID_DESIGN_RATING
-        return self.detection**2 * self.fuel / self.production_cost
+        detection_factor = self.detection ** 2
+        fuel_factor = self._effective_fuel()
+        speed_factor = self.speed ** 0.5
+        return detection_factor * fuel_factor * speed_factor / self.production_cost
+
+
+class KrillSpawnerShipDesigner(ShipDesigner):
+    """Stealthy ship used for harassing the enemy using the Krill Spawner part."""
+    basename = "Krill Spawner"
+    description = "Stealthy ship that unleashes chaos in the enemy backlines."
+    useful_part_classes = DETECTION | FUEL | ENGINES | GENERAL | ARMOUR  # no cloak parts as non-stacking with Krillspawner
+    NAMETABLE = "AI_SHIPDESIGN_NAME_KRILLSPAWNER"
+    NAME_THRESHOLDS = sorted([0])
+    filter_useful_parts = True
+    filter_inefficient_parts = True
+
+    def __init__(self):
+        ShipDesigner.__init__(self)
+        self.additional_specifications.minimum_speed = 30
+        self.additional_specifications.minimum_fuel = 2
+
+    def _rating_function(self):
+        if AIDependencies.PART_KRILL_SPAWNER not in self.partnames:
+            return INVALID_DESIGN_RATING
+        structure_factor = (1 + self.structure - self._minimum_structure())**0.03  # nice to have but not too important
+        fuel_factor = self._effective_fuel()
+        speed_factor = 1 + (self.speed - self._minimum_speed())**0.1
+        stealth_factor = 1 + (self.stealth + self.asteroid_stealth / 2)  # TODO: Adjust for enemy detection strength
+        detection_factor = self.detection**1.5
+        return (structure_factor * fuel_factor * speed_factor *
+                stealth_factor * detection_factor / self.production_cost)
+
+    def _minimum_structure(self):
+        return 2 * self._effective_mine_damage() + 1
+
+    def _starting_guess(self, available_parts, num_slots):
+        # starting guess is a design completely empty except for the krill spawner part.
+        ret_val = (len(available_parts)+1)*[0]
+        if num_slots == 0:
+            return ret_val
+        if AIDependencies.PART_KRILL_SPAWNER not in available_parts:
+            ret_val[-1] = num_slots
+        else:
+            idx = available_parts.index(AIDependencies.PART_KRILL_SPAWNER)
+            ret_val[idx] = 1
+            ret_val[-1] = num_slots - 1
+        return ret_val
 
 
 def _get_planets_with_shipyard():

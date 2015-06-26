@@ -1,6 +1,7 @@
 #include "SitRepEntry.h"
 
 #include "i18n.h"
+#include "Logger.h"
 #include "../universe/Predicates.h"
 #include "../universe/Building.h"
 #include "../universe/Planet.h"
@@ -8,7 +9,6 @@
 #include "../universe/Ship.h"
 #include "../universe/Fleet.h"
 #include "../universe/Universe.h"
-#include "../util/Logger.h"
 
 SitRepEntry::SitRepEntry() :
     VarText(),
@@ -169,9 +169,9 @@ SitRepEntry CreateCombatDamagedObjectSitRep(int object_id, int combat_system_id,
 
     } else if (TemporaryPtr<const Planet> planet = boost::dynamic_pointer_cast<const Planet>(obj)) {
         if (planet->Unowned())
-            sitrep = SitRepEntry(UserStringNop("SITREP_UNOWNED_PLANET_BOMBARDED_AT_SYSTEM"), "icons/sitrep/combat_damage.png");
+            sitrep = SitRepEntry(UserStringNop("SITREP_UNOWNED_PLANET_BOMBARDED_AT_SYSTEM"), "icons/sitrep/colony_bombarded.png");
         else
-            sitrep = SitRepEntry(UserStringNop("SITREP_PLANET_BOMBARDED_AT_SYSTEM"), "icons/sitrep/combat_damage.png");
+            sitrep = SitRepEntry(UserStringNop("SITREP_PLANET_BOMBARDED_AT_SYSTEM"), "icons/sitrep/colony_bombarded_own.png");
         sitrep.AddVariable(VarText::PLANET_ID_TAG,     boost::lexical_cast<std::string>(object_id));
 
     } else {

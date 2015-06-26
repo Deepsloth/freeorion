@@ -1,7 +1,7 @@
 import copy
 from collections import OrderedDict as odict
+from time import time
 import sys
-
 import freeOrionAIInterface as fo  # pylint: disable=import-error
 
 import AIFleetMission
@@ -49,6 +49,12 @@ piloting_grades = {}
 class AIstate(object):
     """Stores AI game state."""
     def __init__(self, aggression=fo.aggression.typical):
+        # Debug info
+        # unique id for game
+        self.uid = self.generate_uid(first=True)
+        # unique ids for turns.  {turn: uid}
+        self.turn_uids = {}
+
         # 'global' (?) variables
         # self.foodStockpileSize = 1    # food stored per population
         self.minimalColoniseValue = 3  # minimal value for a planet to be colonised
@@ -104,7 +110,21 @@ class AIstate(object):
         self.empire_standard_fighter = (4, ((4, 1),), 0.0, 10.0)
         self.empire_standard_enemy = (4, ((4, 1),), 0.0, 10.0)  # TODO: track on a per-empire basis
         self.empire_standard_enemy_rating = 40  # TODO: track on a per-empire basis
-        
+
+    def generate_uid(self, first=False):
+        """
+        Generates unique identifier.
+        It is hexed number of milliseconds.
+        To set self.uid use flag first=True result will be
+            number of mils between current time and some recent date
+        For turn result is mils between uid and current time
+        """
+        time_delta = (time() - 1433809768) * 1000
+        if not first:
+            time_delta - int(self.uid, 16)
+        res = hex(int(time_delta))[2:].strip('L')
+        return res
+
     def __setstate__(self, state_dict):
         self.__dict__.update(state_dict)  # update attributes
         for dict_attrib in ['qualifyingColonyBaseTargets',
@@ -120,7 +140,34 @@ class AIstate(object):
         for odict_attrib in ['colonisablePlanetIDs', 'colonisableOutpostIDs']:
             if dict_attrib not in state_dict:
                 self.__dict__[odict_attrib] = odict()
+        if 'uid' not in state_dict:
+            self.uid = self.generate_uid(first=True)
+        if 'turn_uids' not in state_dict:
+            self.turn_uids = {}
         self.__dict__.setdefault('empire_standard_enemy_rating', 40)
+
+    def set_turn_uid(self):
+        """
+        Set turn uid. Should be called once per generateOrders.
+        When game loaded same turn can be evaluated once again. We force change id for it.
+        """
+        uid = self.generate_uid()
+        self.turn_uids[fo.currentTurn()] = uid
+        return uid
+
+    def get_current_turn_uid(self):
+        """
+        Return uid of current turn.
+        """
+        return self.turn_uids.setdefault(fo.currentTurn(), self.generate_uid())
+
+    def get_prev_turn_uid(self):
+        """
+        Return uid of previous turn.
+        If called during the first turn after loading a saved game that had an AI version not yet using uids
+        will return default value.
+        """
+        return self.turn_uids.get(fo.currentTurn() - 1, '0')
 
     def refresh(self):
         """Turn start AIstate cleanup/refresh."""
@@ -399,6 +446,8 @@ class AIstate(object):
                     mypattack += prating['attack']
                     myphealth += prating['health']
                 else:
+                    if [special for special in planet.specials if "_NEST_" in special]:
+                        sys_status['nest_threat'] = 100;
                     pattack += prating['attack']
                     phealth += prating['health']
             sys_status['planetThreat'] = pattack*phealth
@@ -426,6 +475,8 @@ class AIstate(object):
                 sys_status['monsterThreat'] = monster_rating
                 sys_status['totalThreat'] = FleetUtilsAI.combine_ratings_list([enemy_rating, mob_rating, monster_rating, pattack * phealth])
             sys_status['regional_fleet_threats'] = sys_status['local_fleet_threats'].copy()
+            sys_status['fleetThreat'] = max(sys_status['fleetThreat'], sys_status.get('nest_threat', 0))
+            sys_status['totalThreat'] = max(sys_status['totalThreat'], sys_status.get('nest_threat', 0))
 
             if partial_vis_turn > 0 and sys_id not in supply_unobstructed_systems:  # has been seen with Partial Vis, but is currently supply-blocked
                 sys_status['fleetThreat'] = max(sys_status['fleetThreat'], min_hidden_attack * min_hidden_health)
@@ -494,7 +545,8 @@ class AIstate(object):
             if fthreat > max_threat:
                 max_threat = fthreat
             threat = FleetUtilsAI.combine_ratings(threat, fthreat)
-            myrating = FleetUtilsAI.combine_ratings(myrating, sys_status.get('all_local_defenses', 0))
+            myrating = FleetUtilsAI.combine_ratings(myrating, sys_status.get('myFleetRating', 0))
+            # myrating = FleetUtilsAI.combine_ratings(myrating, sys_status.get('all_local_defenses', 0))
             threat_fleets.update(sys_status.get('local_fleet_threats', []))
         return threat, max_threat, myrating, threat_fleets
 
@@ -1028,7 +1080,7 @@ class AIstate(object):
         print "--------------------"
         print "Map of Missions keyed by ID:"
         for item in self.get_fleet_missions_map().items():
-            print " %4d : %s " % item
+            print "    %-4d: %s" % item
         print "--------------------"
         # TODO: check length of fleets for losses or do in AIstat.__cleanRoles
         known_fleets = self.get_fleet_roles_map()

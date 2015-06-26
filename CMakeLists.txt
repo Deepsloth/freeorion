@@ -19,6 +19,7 @@ set(FreeOrion_VERSION 0.4.4+)
 set(FREEORION_RELEASE false)
 
 set(MINIMUM_BOOST_VERSION 1.54.0)
+set(PYTHON_VERSION 2.7)
 
 option(BUILD_TESTS "Controls generation of unit tests." OFF)
 
@@ -47,10 +48,8 @@ if (WIN32)
         -D_WIN32_WINNT=0x0501
     )
     if (MSVC)
-        set (CMAKE_PREFIX_PATH "${CMAKE_SOURCE_DIR}/../")
-        set (BOOST_ROOT "${CMAKE_SOURCE_DIR}/../Boost/")
-        set (BOOST_INCLUDEDIR "${CMAKE_SOURCE_DIR}/../Boost/include/boost_1_51/")
-        set (OIS_INC_SEARCH_PATH "${CMAKE_SOURCE_DIR}/OIS/")
+        set (CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/../")
+        set (BOOST_ROOT "${CMAKE_BINARY_DIR}/../Boost")
         set (CMAKE_STATIC_LIBRARY_PREFIX "lib")
         set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4099 /wd4101 /wd4146 /wd4244 /wd4251 /wd4258 /wd4267 /wd4275 /wd4351 /wd4800 /wd4996")
         set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} /NODEFAULTLIB:LIBCMT")
@@ -76,12 +75,13 @@ else ()
     message(FATAL_ERROR "Unknown platform type! Your setup is not a supported platform for FreeOrion.")
 endif ()
 
-find_package(PythonInterp REQUIRED)
+find_package(PythonInterp ${PYTHON_VERSION} REQUIRED)
 
 # To run the version generation every compile we need to deferr the
 # execution to a separate target and the existing python command
 add_custom_target(freeorionversion
     COMMAND
+    "${PYTHON_EXECUTABLE}"
     "${CMAKE_SOURCE_DIR}/cmake/make_versioncpp.py"
     "${CMAKE_SOURCE_DIR}"
     "CMake"
@@ -114,6 +114,10 @@ include_directories(
     ${ZLIB_INCLUDE_DIR}
     ${CMAKE_SOURCE_DIR}
     GG
+)
+
+link_directories(
+    ${Boost_LIBRARY_DIRS}
 )
 
 if (FREEORION_RELEASE)
@@ -259,7 +263,7 @@ add_library(freeorioncommon
 
 add_dependencies(freeorioncommon freeorionversion)
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+if (CMAKE_CXX_COMPILER_ID STREQUAL Clang)
     set_property(
         SOURCE
         util/SerializePathingEngine.cpp
@@ -375,6 +379,7 @@ else ()
     install(
         TARGETS freeorioncommon
         LIBRARY DESTINATION lib${LIB_SUFFIX}/freeorion
+        RUNTIME DESTINATION .
         COMPONENT COMPONENT_FREEORION
     )
 
@@ -436,11 +441,7 @@ else ()
     if (WIN32)
         install(
             FILES
-            OIS.dll
             OpenAL32.dll
-            Plugin_OctreeSceneManager.dll
-            Plugin_ParticleFX.dll
-            RenderSystem_GL.dll
             boost_date_time-vc90-mt-1_44.dll
             boost_filesystem-vc90-mt-1_44.dll
             boost_iostreams-vc90-mt-1_44.dll

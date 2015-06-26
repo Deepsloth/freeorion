@@ -83,7 +83,7 @@ add_library(freeorionparse
     ${freeorionparse_SOURCE}
 )
 
-if ("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+if (CMAKE_CXX_COMPILER_ID STREQUAL Clang)
     set_property(
         SOURCE
         ConditionParser1.cpp
@@ -96,6 +96,7 @@ endif ()
 install(
     TARGETS freeorionparse
     LIBRARY DESTINATION lib${LIB_SUFFIX}/freeorion
+    RUNTIME DESTINATION .
     COMPONENT COMPONENT_FREEORION
 )
 

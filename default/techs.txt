@@ -50,6 +50,9 @@ Tech
     researchturns = 1
     graphic = ""
 
+
+CANDIDATE_BATTLE_CHECK
+'''Turn low = LocalCandidate.System.LastTurnBattleHere + 1'''
 Tech
     Name = "DEF_GARRISON_1"
     description = "DEF_GARRISON_1_DESC"
@@ -70,6 +73,14 @@ Tech
     researchcost = 15 * [[TECH_COST_MULTIPLIER]]
     researchturns = 5
     prerequisites = "DEF_GARRISON_1"
+    effectsgroups =
+        EffectsGroup
+            scope = And [
+                Planet
+                OwnedBy empire = Source.Owner
+                [[CANDIDATE_BATTLE_CHECK]]
+            ]
+            effects = SetTroops value = Value + 1
     graphic = "icons/tech/troops.png"
     
 Tech
@@ -81,6 +92,14 @@ Tech
     researchcost = 50 * [[TECH_COST_MULTIPLIER]]
     researchturns = 7
     prerequisites = "DEF_GARRISON_2"
+    effectsgroups =
+        EffectsGroup
+            scope = And [
+                Planet
+                OwnedBy empire = Source.Owner
+                [[CANDIDATE_BATTLE_CHECK]]
+            ]
+            effects = SetTroops value = Value + 2
     graphic = "icons/tech/troops.png"
     
 Tech
@@ -92,6 +111,14 @@ Tech
     researchcost = 150 * [[TECH_COST_MULTIPLIER]]
     researchturns = 9
     prerequisites = "DEF_GARRISON_3"
+    effectsgroups =
+        EffectsGroup
+            scope = And [
+                Planet
+                OwnedBy empire = Source.Owner
+                [[CANDIDATE_BATTLE_CHECK]]
+            ]
+            effects = SetTroops value = Value + 3
     graphic = "icons/tech/troops.png"
 
 Tech
@@ -156,7 +183,7 @@ Tech
                 Planet
                 OwnedBy empire = Source.Owner
             ]
-            effects = SetDefense value = Value + 0.25*Target.Construction
+            effects = SetDefense value = Value + max(0.1*Target.MaxDefense, 0.25*Target.Construction)
 
 Tech
     name = "DEF_PLAN_BARRIER_SHLD_1"
@@ -175,7 +202,7 @@ Tech
             ]
             effects = [
 //                SetMaxShield value = Value + 30
-                SetShield value = Value + 0.25*Target.Construction
+                SetShield value = Value + max(min(1.0, Value), 0.25*Target.Construction)
             ]
     graphic = "icons/tech/planetary_barrier_shield.png"
 
@@ -196,7 +223,7 @@ Tech
             ]
             effects = [
 //                SetMaxShield value = Value + 60
-                SetShield value = Value + 0.75*Target.Construction
+                SetShield value = Value + max(min(3.0, Value), 0.75*Target.Construction)
             ]
     graphic = "icons/tech/planetary_barrier_shield.png"
 
@@ -217,7 +244,7 @@ Tech
             ]
             effects = [
 //                SetMaxShield value = Value + 90
-                SetShield value = Value + 1.0*Target.Construction
+                SetShield value = Value + max(min(5.0, Value), 1.0*Target.Construction)
             ]
     graphic = "icons/tech/planetary_barrier_shield.png"
 
@@ -238,7 +265,7 @@ Tech
             ]
             effects = [
 //                SetMaxShield value = Value + 150
-                SetShield value = Value + 1.5*Target.Construction
+                SetShield value = Value + max(min(9.0, Value), 1.5*Target.Construction)
             ]
     graphic = "icons/tech/planetary_barrier_shield.png"
 
@@ -259,7 +286,7 @@ Tech
             ]
             effects = [
 //                SetMaxShield value = Value + 150
-                SetShield value = Value + 2.5*Target.Construction
+                SetShield value = Value + max(min(14.0, Value), 2.5*Target.Construction)
             ]
     graphic = "icons/tech/planetary_barrier_shield.png"
 
@@ -1663,7 +1690,10 @@ Tech
     ]
     effectsgroups = 
         EffectsGroup
-            scope = OwnedBy empire = Source.Owner
+            scope = And [
+                        Species
+                        OwnedBy empire = Source.Owner
+                    ]
             effects = SetTargetConstruction value = Value + 10
     graphic = "icons/tech/n-dimensional_structures.png"
 
@@ -1799,6 +1829,7 @@ Tech
     unlock = [
         Item type = Building name = "BLD_STARGATE"
     ]
+    graphic = "icons/building/stargate.png"
 
 Tech
     name = "CON_ART_PLANET"
@@ -1889,7 +1920,7 @@ Tech
             effects = [
                 GenerateSitRepMessage
                     message = "SITREP_POP_THRESHOLD"
-                    icon = "icons/specials_huge/ancient_ruins.png"
+                    icon = "icons/sitrep/colony_growth.png"
                     parameters = [
                         tag = "planet" data = Target.ID
                     ]
@@ -2170,6 +2201,8 @@ Tech
     prerequisites = [
         "SHP_MINIAST_SWARM"
         "SHP_HEAVY_AST_HULL"
+        "SHP_CAMO_AST_HULL"
+        "SHP_MONOMOLEC_LATTICE"
     ]
     unlock = [
         Item type = ShipHull name = "SH_SCATTERED_ASTEROID"
@@ -2208,7 +2241,7 @@ Tech
     researchturns = 5
     prerequisites = [
         "SHP_ORG_HULL"
-        "GRO_LIFECYCLE_MAN"
+        "GRO_GENETIC_ENG"
     ]
     unlock = [
         Item type = ShipHull name = "SH_STATIC_MULTICELLULAR"
@@ -2224,7 +2257,10 @@ Tech
     category = "SHIPS_CATEGORY"
     researchcost = 45 * [[TECH_COST_MULTIPLIER]]
     researchturns = 8
-    prerequisites = "SHP_MULTICELL_CAST"
+    prerequisites = [
+        "SHP_MULTICELL_CAST"
+        "GRO_LIFECYCLE_MAN"
+        ]
     unlock = [
         Item type = ShipHull name = "SH_ENDOMORPHIC"
         Item type = Building name = "BLD_SHIPYARD_ORG_XENO_FAC"

@@ -525,10 +525,12 @@ OptionsWnd::OptionsWnd():
     BoolOption(current_page, 0, "UI.galaxy-gas-background",       UserString("OPTIONS_GALAXY_MAP_GAS"));
     BoolOption(current_page, 0, "UI.galaxy-starfields",           UserString("OPTIONS_GALAXY_MAP_STARFIELDS"));
     BoolOption(current_page, 0, "UI.show-galaxy-map-scale",       UserString("OPTIONS_GALAXY_MAP_SCALE_LINE"));
+    BoolOption(current_page, 0, "UI.show-galaxy-map-scale-circle",UserString("OPTIONS_GALAXY_MAP_SCALE_CIRCLE"));
     BoolOption(current_page, 0, "UI.show-galaxy-map-zoom-slider", UserString("OPTIONS_GALAXY_MAP_ZOOM_SLIDER"));
     BoolOption(current_page, 0, "UI.show-detection-range",        UserString("OPTIONS_GALAXY_MAP_DETECTION_RANGE"));
     IntOption(current_page,  0, "UI.detection-range-opacity",     UserString("OPTIONS_GALAXY_MAP_DETECTION_RANGE_OPACITY"));
     BoolOption(current_page, 0, "UI.map-right-click-popup-menu",  UserString("OPTIONS_GALAXY_MAP_POPUP"));
+    BoolOption(current_page, 0, "UI.show-unexplored_system_overlay", UserString("OPTIONS_UI_SYSTEM_UNEXPLORED_OVERLAY"));
 
     m_tabs->SetCurrentWnd(0);
 

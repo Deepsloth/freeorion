@@ -90,6 +90,8 @@ ShipDesign
         "SR_WEAPON_1_1"
         ""
         "AR_PRECURSOR_PLATE"
+        ""
+        ""
         "SH_DEFLECTOR"
     ]
     icon = "icons/monsters/maintenance_ship.png"
@@ -167,7 +169,7 @@ ShipDesign
     description = "SM_KRAKEN_1_DESC"
     hull = "SH_KRAKEN_1_BODY"
     parts = [
-        "SP_DEATH_SPORE"
+        ""
         "SR_WEAPON_1_3"
         ""
         ""
@@ -194,7 +196,7 @@ ShipDesign
     hull = "SH_KRAKEN_3_BODY"
     parts = [
         "SR_WEAPON_3_4"
-        "SP_DEATH_SPORE"
+        "SP_BIOTERM"
         ""
         ""
         ]
@@ -246,7 +248,7 @@ ShipDesign
     hull = "SH_JUGGERNAUT_1_BODY"
     parts = [
         "SR_WEAPON_1_3"
-        "SP_DEATH_SPORE"
+        ""
         ""
         "SH_DEFENSE_GRID"
         ]
@@ -272,7 +274,7 @@ ShipDesign
     hull = "SH_JUGGERNAUT_3_BODY"
     parts = [
         "SR_WEAPON_4_4"
-        "SP_DEATH_SPORE"
+        "SP_BIOTERM"
         ""
         "SH_PLASMA"
         ]
@@ -399,7 +401,7 @@ ShipDesign
         "SR_WEAPON_4_4"
         "SR_WEAPON_4_4"
         "SR_WEAPON_4_4"
-        "SR_WEAPON_4_4"
+        "SH_PLASMA"
         "ST_CLOAK_2"
     ]
     icon  = "icons/monsters/juggernaut-4.png"

@@ -96,7 +96,7 @@ Species
                     ]
                 ]
             ]
-            effects = CreateShip designname = "SM_ACIREMA_GUARD"
+            effects = CreateShip designname = "SM_ACIREMA_GUARD" species = "SP_ACIREMA"
 
         EffectsGroup
             scope = And [
@@ -715,6 +715,46 @@ Species
     
     graphic = "icons/species/gysache.png"
 
+Species
+    name = "SP_HAPPY"
+    description = "SP_HAPPY_DESC"
+    gameplay_description = "SP_HAPPY_GAMEPLAY_DESC"
+    Native
+    CanProduceShips
+    CanColonize
+
+    tags = [ "ROBOTIC" "TELEPATHIC" "AI_TAG_GOOD_RESEARCH" "AI_TAG_BAD_POPULATION" "AI_TAG_GREAT_SUPPLY" ]
+
+    foci = [
+        [[HAS_INDUSTRY_FOCUS]]
+        [[HAS_RESEARCH_FOCUS]]
+        [[HAS_GROWTH_FOCUS]]
+        [[HAS_MINING_FOCUS]]
+        [[HAS_ADVANCED_FOCI]]
+    ]
+   
+    preferredfocus = "FOCUS_RESEARCH"
+   
+    effectsgroups = [
+        [[BAD_INDUSTRY]]
+        [[GOOD_RESEARCH]]
+       
+        [[BAD_POPULATION]]
+        [[AVERAGE_HAPPINESS]]
+        [[GREAT_SUPPLY]]
+        [[BAD_GROUND_TROOPS]]
+       
+        [[BAD_STEALTH]]
+        [[GOOD_DETECTION]]
+
+        // not for description
+        [[AVERAGE_PLANETARY_SHIELDS]]
+        [[AVERAGE_PLANETARY_DEFENSE]]
+    ]
+   
+    [[OCEAN_NARROW_EP]]
+   
+    graphic = "icons/species/ichthyoid-06.png"
 
 Species
     name = "SP_HHHOH"
@@ -2515,6 +2555,10 @@ PHOTOTROPHIC_BONUS
             scope = Contains Source
             activation = AND [
                 Planet
+                OR [
+                    OwnedBy affiliation = AnyEmpire
+                    Star type = [BlackHole NoStar] // Natives are allowed to have bright or dim stars
+                ]
                 HasTag name = "PHOTOTROPHIC"
                 Turn high = 0
                 NOT Star type = [Orange]
@@ -2953,7 +2997,7 @@ BASIC_GROUND_TROOPS
             activation = OwnerHasTech name = "DEF_GARRISON_4"
             stackinggroup = "BASIC_TROOPS_STACK"
             accountinglabel = "DEF_GARRISON_4"
-            effects = SetMaxTroops value = Value + 20  
+            effects = SetMaxTroops value = Value + 30  
 
 EffectsGroup
             scope = And [
@@ -2966,7 +3010,7 @@ EffectsGroup
             ]
             stackinggroup = "BASIC_TROOPS_STACK"
             accountinglabel = "DEF_GARRISON_3"
-            effects = SetMaxTroops value = Value + 15
+            effects = SetMaxTroops value = Value + 20
             
 EffectsGroup
             scope = And [
@@ -2979,7 +3023,7 @@ EffectsGroup
             ]
             stackinggroup = "BASIC_TROOPS_STACK"
             accountinglabel = "DEF_GARRISON_2"
-            effects = SetMaxTroops value = Value + 10
+            effects = SetMaxTroops value = Value + 12
 
 EffectsGroup
             scope = And [
@@ -2992,7 +3036,7 @@ EffectsGroup
             ]
             stackinggroup = "BASIC_TROOPS_STACK"
             accountinglabel = "DEF_GARRISON_1"
-            effects = SetMaxTroops value = Value + 5        
+            effects = SetMaxTroops value = Value + 6        
 
 EffectsGroup
             scope = And [
@@ -3112,6 +3156,19 @@ AVERAGE_PLANETARY_SHIELDS
 
 BASIC_PLANETARY_SHIELDS
 '''EffectsGroup
+            scope = And [
+                Planet
+                OwnedBy empire = Source.Owner
+            ]
+            activation = And [
+                Planet
+                OwnerHasTech name = "DEF_ROOT_DEFENSE"
+            ]
+            stackinggroup = "PLANET_SHIELDS_STACK_ROOT"
+            accountinglabel = "DEF_ROOT_DEFENSE"
+            effects = SetMaxShield value = Value + 1
+
+EffectsGroup
             scope = And [
                 Planet
                 OwnedBy empire = Source.Owner

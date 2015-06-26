@@ -857,6 +857,7 @@ Part
         EffectsGroup    // players can order death spores used on enemies
             scope = And [
                 Planet
+                Species
                 InSystem id = Source.SystemID
                 OrderedBombardedBy condition = Source
                 Or [
@@ -864,7 +865,6 @@ Part
                     Unowned
                 ]
                 VisibleToEmpire empire = Source.Owner
-                HasTag name = "ORGANIC"
             ]
             effects = [
                 SetPopulation value = Value - 0.5
@@ -879,10 +879,10 @@ Part
         EffectsGroup    // monsters use death spores on player planets
             scope = And [
                 Planet
+                Species
                 InSystem id = Source.SystemID
                 OwnedBy affiliation = AnyEmpire
                 Stealth high = Source.Detection
-                HasTag name = "ORGANIC"
             ]
             activation = And [
                 Unowned
@@ -912,6 +912,7 @@ Part
         EffectsGroup    // players can order terminators used on enemies
             scope = And [
                 Planet
+                Species
                 InSystem id = Source.SystemID
                 OrderedBombardedBy condition = Source
                 Or [
@@ -919,7 +920,6 @@ Part
                     Unowned
                 ]
                 VisibleToEmpire empire = Source.Owner
-                HasTag name = "ORGANIC"
             ]
             effects = [
                 SetPopulation value = Value - 1
@@ -934,10 +934,10 @@ Part
         EffectsGroup    // monsters use terminators on player planets
             scope = And [
                 Planet
+                Species
                 InSystem id = Source.SystemID
                 OwnedBy affiliation = AnyEmpire
                 Stealth high = Source.Detection
-                HasTag name = "ORGANIC"
             ]
             activation = And [
                 Unowned
@@ -1007,7 +1007,7 @@ Part
     buildcost = 100 * [[FLEET_UPKEEP_MULTIPLICATOR]]
     buildtime = 9
     location = All
-    effectsgroups =
+    effectsgroups = [
         EffectsGroup
             scope = And [
                 Planet
@@ -1034,6 +1034,15 @@ Part
             ]
             stackinggroup = "SP_KRILL_SPAWN_STACK"
             effects = CreateShip designname = "SM_KRILL_1"
+        
+        EffectsGroup
+            scope = Source
+            activation = And [
+                            Not DesignHasPartClass Low=1 High=999 Class=Stealth
+                            Not Armed
+                        ]
+            effects = SetStealth value = Value + 40
+    ]
             
     icon = ""
 

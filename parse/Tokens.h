@@ -389,6 +389,8 @@
 #define TOKEN_SEQ_13                            \
     (Slot)                                      \
     (Slots)                                     \
+    (SlotsInHull)                               \
+    (SlotsInShipDesign)                         \
     (SlotType)                                  \
     (Small)                                     \
     (SortBy)                                    \
@@ -467,6 +469,7 @@
     (Unowned)                                   \
     (Unproducible)                              \
     (Unresearchable)                            \
+    (UserString)                                \
     (Value)                                     \
     (ValueTest)                                 \
     (Victory)                                   \
