@@ -1617,7 +1617,7 @@ BuildingType
             HasSpecial name = "JUGGERNAUT_NEST_SPECIAL"
         ]
     ]
-    icon = "icons/building/genome_bank.png"
+    icon = ""
 
 BuildingType
     name = "BLD_COLONY_BASE"

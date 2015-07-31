@@ -1968,6 +1968,7 @@ Tech
         "GRO_LIFECYCLE_MAN"
     ]
     unlock = Item type = Building name = "BLD_MATURATION_PEN"
+    graphic = "icons/tech/industrial_cloning.png"
 
 Tech
     name = "SHP_INTSTEL_LOG"
